@@ -1,3 +1,3 @@
 *.exe
-./.env
-./.idea
+*.env
+.idea/
