@@ -2,12 +2,16 @@ package main
 
 import (
 	"3.Server/internal/config"
+	"3.Server/internal/http-server/handlers/redirect"
+	"3.Server/internal/http-server/handlers/url/save"
 	"3.Server/internal/lib/logger/sl"
 	"3.Server/internal/storage/postgresql"
 	"3.Server/pkg/postg"
 	"context"
-	"fmt"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"log/slog"
+	"net/http"
 	"os"
 )
 
@@ -37,12 +41,13 @@ func main() {
 	//fmt.Println(pool)
 
 	repository := postgresql.NewRepository(pool, log)
-	id, err := repository.Create(context.TODO(), "Youtube", "https://www.youtube.com/") // https://www.google.ru/
+
+	/*id, err := repository.Create(context.TODO(), "Youtube", "https://www.youtube.com/") // https://www.google.ru/
 	if err != nil {
 		log.Error("", sl.Err(err))
 	}
 
-	fmt.Println(id)
+	fmt.Println(id)*/
 
 	/*dbURL, err := repository.Get(context.Background(), "Yandex")
 	if err != nil {
@@ -62,6 +67,49 @@ func main() {
 	if err != nil {
 		log.Error("repository.Delete:", sl.Err(err))
 	}*/
+
+	router := chi.NewRouter()
+
+	router.Use(middleware.RequestID)
+	router.Use(middleware.Logger) // будет логировать все входящие запросы (добавит строчку)
+	//router.Use(mwLogger.New(log)) // самописный middleware
+	router.Use(middleware.Recoverer) // при возникновении паники будет внутри хендрера, будет востановлена паника
+	router.Use(middleware.URLFormat) // форматирует url
+
+	// authorization
+	router.Route("/url", func(r chi.Router) {
+		r.Use(middleware.BasicAuth("url-shortener", map[string]string{
+			cfg.HTTPServer.User: cfg.HTTPServer.Password,
+			//cfg.HTTPServer.User: cfg.HTTPServer.Password, // добавление остальных пользователей и паролей для них
+		}))
+
+		r.Post("/", save.New(log, repository))
+		// TODO: add DELETE /url/{id}
+	})
+
+	// handlers
+	router.Post("/url", save.New(log, repository))
+	router.Get("/{alias}", redirect.New(log, repository))
+	//router.Delete("/{alias}", redirect.New(log, repository))
+
+	log.Info("starting server", slog.String("address", cfg.Address))
+
+	//done := make(chan os.Signal, 1)
+	//signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	srv := &http.Server{
+		Addr:         cfg.Address,
+		Handler:      router,
+		ReadTimeout:  cfg.HTTPServer.Timeout,
+		WriteTimeout: cfg.HTTPServer.Timeout,
+		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
+	}
+
+	if err := srv.ListenAndServe(); err != nil {
+		log.Error("failed to start server")
+	}
+
+	log.Info("server stopped")
 }
 
 func setupLogger(env string) *slog.Logger {

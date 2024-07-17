@@ -1,0 +1,70 @@
+package redirect
+
+import (
+	resp "3.Server/internal/lib/api/response"
+	"3.Server/internal/lib/logger/sl"
+	"3.Server/internal/storage"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/render"
+	//resp "url-shortener/internal/lib/api/response"
+	//"url-shortener/internal/lib/logger/sl"
+	//"url-shortener/internal/storage"
+)
+
+// URLGetter is an interface for getting url by alias.
+//
+//go:generate go run github.com/vektra/mockery/v2@v2.28.2 --name=URLGetter
+type URLGetter interface {
+	Get(ctx context.Context, alias string) (string, error)
+}
+
+func New(log *slog.Logger, urlGetter URLGetter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		const op = "handlers.url.redirect.New"
+
+		log := log.With(
+			slog.String("op", op),
+			slog.String("request_id", middleware.GetReqID(r.Context())),
+		)
+
+		alias := chi.URLParam(r, "alias")
+		if alias == "" {
+			log.Info("alias is empty")
+
+			render.JSON(w, r, resp.Error("invalid request"))
+
+			return
+		}
+
+		resURL, err := urlGetter.Get(context.Background(), alias)
+		if errors.Is(err, storage.ErrURLNotFound) {
+			log.Info("url not found", "alias", alias)
+
+			render.JSON(w, r, resp.Error("not found"))
+
+			return
+		}
+
+		if err != nil {
+			log.Error("failed to get url", sl.Err(err))
+
+			render.JSON(w, r, resp.Error("internal error"))
+
+			return
+		}
+
+		log.Info("got url", slog.String("url", resURL))
+
+		// redirect to found url
+		http.Redirect(w, r, resURL, http.StatusFound)
+
+		//TODO: нужно поразбираться почему не приходит ответ в браузере
+		//json.NewEncoder(w).Encode(resURL)
+	}
+}
